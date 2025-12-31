@@ -1,0 +1,12 @@
+# This file tells Git to ignore temporary, local, or sensitive files.
+
+# Local Terraform files
+*.tfstate
+*.tfstate.backup
+
+.terraform/
+crash.log
+crash.*.log
+
+# Mac specific
+.DS_Store

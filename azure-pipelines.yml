@@ -1,0 +1,112 @@
+trigger:
+  branches:
+    include:
+      - master  
+
+pool:
+  vmImage: 'ubuntu-latest'
+
+stages:
+# === STAGE 1: PLAN ===
+# This stage runs Init, Plan, and saves the plan file as an artifact.
+- stage: Plan
+  displayName: 'Plan Infrastructure'
+  jobs:
+  - job: PlanJob
+    displayName: 'Terraform Plan'
+    steps:
+    - task: TerraformInstaller@1
+      inputs:
+        terraformVersion: 'latest'
+      displayName: 'Install Terraform'
+
+
+    - task: TerraformTask@5
+      displayName: 'Terraform Init (Plan)'
+      inputs:
+        provider: 'azurerm'
+        command: 'init'
+        commandOptions: '-reconfigure'
+        backendServiceArm: 'sc-azure-dissertation' 
+        backendAzureRmResourceGroupName: 'rg-terraform-backend'
+        backendAzureRmStorageAccountName: 'tfstatedissertation'
+        backendAzureRmContainerName: 'tfstate'
+        backendAzureRmKey: 'prod.terraform.tfstate'
+
+    # Uses your .tfvars file, injects the secret password,
+    # and saves the plan to 'tfplan'
+    - task: TerraformTask@5
+      displayName: 'Terraform Plan'
+      inputs:
+        provider: 'azurerm'
+        command: 'plan'
+        commandOptions: '-var-file=terraform.tfvars -out=tfplan'
+        environmentServiceNameAzureRM: 'sc-azure-dissertation' # Your Service Connection
+      env:
+        # This maps your DevOps secret variable $(VM_ADMIN_PASSWORD)
+
+        TF_VAR_vm_admin_password: $(VM_ADMIN_PASSWORD)
+
+
+    - task: PublishPipelineArtifact@1
+      displayName: 'Publish Plan Artifact'
+      inputs:
+        targetPath: '$(System.DefaultWorkingDirectory)/tfplan'
+        artifactName: 'tfplan'
+        publishLocation: 'pipeline'
+
+# === STAGE 2: APPLY ===
+# This stage downloads 'tfplan' and applies it after manual approval.
+- stage: Apply
+  displayName: 'Apply Infrastructure'
+  dependsOn: Plan # Only runs if Plan succeeds
+  condition: succeeded()
+
+  jobs:
+
+  - deployment: ApplyJob
+    displayName: 'Terraform Apply'
+    environment: 'production' 
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - checkout: self 
+
+          
+          - task: DownloadPipelineArtifact@2
+            displayName: 'Download Plan Artifact'
+            inputs:
+              artifactName: 'tfplan'
+              targetPath: '$(System.DefaultWorkingDirectory)'
+
+          - task: TerraformInstaller@1
+            inputs:
+              terraformVersion: 'latest'
+            displayName: 'Install Terraform'
+
+          - task: TerraformTask@5
+            displayName: 'Terraform Init (Apply)'
+            inputs:
+              provider: 'azurerm'
+              command: 'init'
+              commandOptions: '-reconfigure'
+              backendServiceArm: 'sc-azure-dissertation'
+              
+              backendAzureRmResourceGroupName: 'rg-terraform-backend'
+              backendAzureRmStorageAccountName: 'tfstatedissertation'
+              backendAzureRmContainerName: 'tfstate'
+              backendAzureRmKey: 'prod.terraform.tfstate'
+
+
+          - task: TerraformTask@5
+            displayName: 'Terraform Apply'
+            inputs:
+              provider: 'azurerm'
+              command: 'apply'
+              commandOptions: 'tfplan' 
+              environmentServiceNameAzureRM: 'sc-azure-dissertation'
+            env:
+              # We must also provide the secret password to the Apply stage
+              TF_VAR_vm_admin_password: $(VM_ADMIN_PASSWORD)
+
